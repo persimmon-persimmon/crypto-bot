@@ -140,9 +140,9 @@ def log_writer(q_log):
     fh = logging.FileHandler(os.path.join(current_dir,f'{__file__}.log'))
     logger.addHandler(fh)
     # ログのフォーマットを指定する。
-    formatter = logging.Formatter('%(asctime)s:%(message)s')
-    fh.setFormatter(formatter)
-    sh.setFormatter(formatter)
+    #formatter = logging.Formatter('%(asctime)s:%(message)s')
+    #fh.setFormatter(formatter)
+    #sh.setFormatter(formatter)
     while True:
         v=q_log.get()
         # ログ書き込み
@@ -151,11 +151,12 @@ def log_writer(q_log):
 # ハイパーパラメータ
 @dataclass
 class Paras:
-    delta:int=5 # best priceに対するorder price
+    delta:int=10 # best priceに対するorder price
     allow_dd:float=0.8 # 許容ドローダウン
-    lot:float=0.0001 # 一度の注文量
-    entry_spread:int=500
+    lot:float=0.0002 # 一度の注文量
+    entry_spread:int=1000
     leverage_level:int=2
+    retry_num:int=15
 
 #処理フロー
 #１．最新情報を取得しロングとショート両方の指値注文を入れる。
@@ -192,15 +193,10 @@ if __name__=='__main__':
     p2=Process(target=log_writer,args=(q_log,))
     p2.start()
     q_log.put('start')
-    max_asset=get_free_balance()
-
+    now_asset=get_free_balance()
+    max_asset=now_asset
     time.sleep(5)
     
-    #pprint(mh.book_newest)
-    #mh.join()
-    #p1.terminate()
-
-    #exit()
     entry_flg=False
     now_entry=None
     executor=ThreadPoolExecutor(max_workers=2)
@@ -211,8 +207,6 @@ if __name__=='__main__':
         result_dict[k]=0
     return_ary=[]
     value=get_trades()
-    last_trade_id=value[0]['id'] # 記録済みでかつ最後のトレードid
-    lase_trade_index=-1 # return_ary内で記録済みで最大のidx
     while True:
         if entry_flg==False:
             loop_count+=1
@@ -230,25 +224,7 @@ if __name__=='__main__':
                     # リターンを記録
                     break
                 max_asset=max(now_asset,max_asset)
-                if len(return_ary)>0:
-                    value=get_trades()
-                    i=-1
-                    for j in range(len(value)):
-                        if value[-j-1]['id']==last_trade_id:
-                            i=len(value)-j
-                    while i<len(value):
-                        lase_trade_index+=1
-                        if len(return_ary)<=lase_trade_index:break
-                        if return_ary[lase_trade_index]['close_type']=='limit':
-                            if i+1>=len(value):break
-                            return_ary[lase_trade_index]['return']=value[i]['pnl']+value[i+1]['pnl']
-                            i+=2
-                        else:
-                            return_ary[lase_trade_index]['return']=value[i]['pnl']
-                            i+=1
-                        last_trade_id=value[i-1]['id']
-                        assert lase_trade_index<=len(return_ary),'return_aryの数が足りない。return_ary:'+ str(len(return_ary)) + ', index:' + str(lase_trade_index)
-                if loop_count>50:break
+                if loop_count>20:break
             if mh.book_newest['asks'][0][0]-mh.book_newest['bids'][0][0]<paras.entry_spread:
                 time.sleep(random.random())
                 continue
@@ -268,11 +244,11 @@ if __name__=='__main__':
             now_entry={'timestamp':datetime.datetime.now().timestamp(),'sell':sell_order['price'],'buy':buy_order['price'],'return':0}
             result_dict['order_count']+=1
             entry_flg=True
-        #２．5秒待つ
-        time.sleep(5)
-        if entry_flg==False:continue
+            retry_cnt=0
+        #２．1秒待つ
+        time.sleep(1)
         timestamp=datetime.datetime.now().timestamp()
-        
+
         # 注文の最新状態を取得
         order_ids=[str(buy_order['id']),str(sell_order['id'])]
         orders=get_some_orders(order_ids)
@@ -289,16 +265,20 @@ if __name__=='__main__':
         #３．両方約定していれば１に戻る。
         if sell_order['status']=='closed' and buy_order['status']=='closed':
             # リターンを記録
-            # get_tradesは情報に遅延があるので即時リターンを取ることはできない。なので時間が経過してからリターンを取得する。
-            # クローズしたタイミングではクローズ種類を記録し配列に入れる。
             now_entry['close_type']='limit'
             return_ary.append(now_entry)
             entry_flg=False
             result_dict['limit_closed_count']+=1
-            q_log.put(f'limit close')
+            ret=(sell_order['price']-buy_order['price'])*paras.lot
+            ret=round(ret,4)
+            now_entry['return']=ret
+            q_log.put(f'limit close:{ret}')
 
-        #４．両方未約定ならキャンセルして１に戻る。  # v2:todo:タッチの差で約定した場合の処理
+        #４．両方未約定ならもうあとretry秒待ってみる。両方未約定ならキャンセルして１に戻る。
         if sell_order['status']=='open' and buy_order['status']=='open':
+            if retry_cnt<paras.retry_num and mh.book_newest['asks'][0][0]-mh.book_newest['bids'][0][0]<paras.entry_spread:
+                retry_cnt+=1
+                continue
             args_ary=[sell_order['id'],buy_order['id']]
             executor.map(cancel_order,args_ary)
             entry_flg=False
@@ -307,60 +287,76 @@ if __name__=='__main__':
 
         #５．ロングのみ約定しているとき。（ショートが未約定）
         if sell_order['status']=='open' and buy_order['status']=='closed':
-            best_ask=mh.book_newest['asks'][0][0]
-            #５－１．best_askがロングの買値よりdelta以上高ければショートの指値を編集→２に戻る
-            #５－２．上に当てはまらないとき、ショート注文をキャンセル、ロングポジションを決済→１に戻る
-            if best_ask>=buy_order['price']+paras.delta:
-                #注文を編集
-                value=edit_order(sell_order['id'],best_ask-paras.delta,paras.lot,timestamp)
-                timestamp+=1
-                if value is None: # 約定済み
-                    # リターンを記録
-                    now_entry['close_type']='limit'
-                    return_ary.append(now_entry)
-                    entry_flg=False
-                    q_log.put(f'limit close')
-                    result_dict['limit_closed_count']+=1
+            while True:
+                best_ask=mh.book_newest['asks'][0][0]
+                #５－１．best_askがロングの買値よりdelta以上高ければ、best_askの値を監視しつつ、注文の情報を編集しつつ約定を待つ
+                #５－２．上に当てはまらないとき、ショート注文をキャンセル、ロングポジションを決済→１に戻る
+                if best_ask>=buy_order['price']+paras.delta  or True:
+                    #注文を編集
+                    value=edit_order(sell_order['id'],best_ask-paras.delta,paras.lot,timestamp)
+                    timestamp+=1
+                    if value is None: # 約定済み
+                        # リターンを記録
+                        now_entry['close_type']='limit'
+                        ret=(sell_order['price']-buy_order['price'])*paras.lot
+                        ret=round(ret,4)
+                        now_entry['return']=ret
+                        return_ary.append(now_entry)
+                        q_log.put(f'limit close:{ret}')
+                        result_dict['limit_closed_count']+=1
+                        entry_flg=False
+                        break
+                    else:
+                        sell_order=value
+                        time.sleep(1)
                 else:
-                    sell_order=value
-            else:
-                cancel_order(sell_order['id'])
-                value=position_close_all()
-                # リターンを記録
-                now_entry['close_type']='market'
-                return_ary.append(now_entry)
-                entry_flg=False
-                q_log.put(f'market close')
-                result_dict['market_closed_count']+=1
-                entry_flg=False
+                    cancel_order(sell_order['id'])
+                    value=position_close_all()
+                    # リターンを記録
+                    now_entry['close_type']='market'
+                    ret=value[0]['pnl']
+                    now_entry['return']=ret
+                    return_ary.append(now_entry)
+                    q_log.put(f'market close:{ret}')
+                    result_dict['market_closed_count']+=1
+                    entry_flg=False
+                    break
 
         #６．ショートのみ約定しているとき。（ロングが未約定）
         if sell_order['status']=='closed' and buy_order['status']=='open':
-            best_bid=mh.book_newest['bids'][0][0]
-            #６－１．best_bidがショートの売値よりdelta以上低ければロングの指値を編集→２に戻る
-            #６－２．上に当てはまらないとき、ロング注文をキャンセル、ショートポジションを決済→１に戻る
-            if best_bid<=sell_order['price']-paras.delta:
-                value=edit_order(buy_order['id'],best_bid+paras.delta,paras.lot,timestamp)
-                timestamp+=1
-                if value is None: # 約定済み
-                    # リターンを記録
-                    now_entry['close_type']='limit'
-                    return_ary.append(now_entry)
-                    entry_flg=False
-                    q_log.put(f'limit close')
-                    result_dict['limit_closed_count']+=1
+            while True:
+                best_bid=mh.book_newest['bids'][0][0]
+                #６－１．best_bidがショートの売値よりdelta以上低ければロングの指値を編集
+                #６－２．上に当てはまらないとき、ロング注文をキャンセル、ショートポジションを決済→１に戻る
+                if best_bid<=sell_order['price']-paras.delta or True:
+                    value=edit_order(buy_order['id'],best_bid+paras.delta,paras.lot,timestamp)
+                    timestamp+=1
+                    if value is None: # 約定済み
+                        # リターンを記録
+                        now_entry['close_type']='limit'
+                        ret=(sell_order['price']-buy_order['price'])*paras.lot
+                        ret=round(ret,4)
+                        now_entry['return']=ret
+                        return_ary.append(now_entry)
+                        q_log.put(f'limit close:{ret}')
+                        result_dict['limit_closed_count']+=1
+                        entry_flg=False
+                        break
+                    else:
+                        buy_order=value
+                        time.sleep(1)
                 else:
-                    buy_order=value
-            else:
-                cancel_order(buy_order['id'])
-                value=position_close_all()
-                # リターンを記録
-                now_entry['close_type']='market'
-                return_ary.append(now_entry)
-                entry_flg=False
-                q_log.put(f'market close')
-                result_dict['market_closed_count']+=1
-                entry_flg=False
+                    cancel_order(buy_order['id'])
+                    value=position_close_all()
+                    # リターンを記録
+                    now_entry['close_type']='market'
+                    ret=value[0]['pnl']
+                    now_entry['return']=ret
+                    return_ary.append(now_entry)
+                    q_log.put(f'market close:{ret}')
+                    result_dict['market_closed_count']+=1
+                    entry_flg=False
+                    break
 
     for x in return_ary:
         q_log.put(json.dumps(x))
@@ -379,18 +375,21 @@ if __name__=='__main__':
     p2.terminate()
     print('shutdown thread pool ..')
     executor.shutdown()
-    print('????')
 
 """
-v2でやること
-・v1:remainingを考慮しない
-->v2:remainingを考慮する
+改善すること
+・remainingを考慮しない
+->remainingを考慮する
 
-・v1:片方のみ約定時、5秒に1回bookを確認し、損失が発生する前に決済する。
-->v2:片方のみ約定時、常にbookを確認し、損失が発生する直前に決済する。
+・片方のみ約定時、5秒に1回bookを確認し、損失が発生する前に決済する。
+->片方のみ約定時、常にbookを確認し、損失が発生する直前に決済する。
 
-（オプション）
-・v1:指値の値は機械的に算出する。
-->v2:値動きを予測し、いい感じのところに指値を置く。
+・一回のエントーで必ず両方決済させる
+→残ってもいいので次のエントリーをする。在庫管理。なるべく成行決済を避ける。
+
+・指値の値は機械的に算出する。
+->値動きを予測し、いい感じのところに指値を置く。
+
+・両方キャンセルする箇所で、タッチの差で約定した場合の処理を入れる。
 
 """
