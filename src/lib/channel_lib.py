@@ -128,7 +128,6 @@ def channel_user_order(q):
     tap.pusher.connect()
     while True:
         time.sleep(2)
-        print(tap.connected())
 
 # private trade
 def channel_user_trade(q):
@@ -149,12 +148,14 @@ def channel_user_execution(q):
         data=json.loads(data)
         q.put(data)
     def on_connect(data):
-        tap.pusher.subscribe("user_executions_cash_btcjpy").bind('updated', update_callback)
+        tap.pusher.subscribe("user_executions_cash_btcjpy").bind('created', update_callback)
     tap = liquidtap.Client(token,secret)
     tap.pusher.connection.bind('pusher:connection_established', on_connect)
     tap.pusher.connect()
     while True:
         time.sleep(10)
+
+
 
 # test
 def data_handle(q):
@@ -165,16 +166,16 @@ if __name__=='__main__':
     # プロセス設定
     q=Queue()
     #p1=Process(target=channel_user_order,args=(q,))
-    #p1=Process(target=channel_user_trade,args=(q,))
+    p1=Process(target=channel_user_trade,args=(q,))
     #p1=Process(target=channel_user_execution,args=(q,))
-    p1=Process(target=channel_ohlcv,args=(q,))
+    #p1=Process(target=channel_user_order,args=(q,))
     
     #p0=Process(target=data_handle,args=(q,))
     p1.start()
     #p2.start()
     #p3.start()
     #p0.start()
-    while True:
+    for _ in range(10):
         v=q.get()
         print(v)
         #time.sleep(10)

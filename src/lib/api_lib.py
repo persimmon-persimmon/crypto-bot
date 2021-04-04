@@ -79,7 +79,7 @@ order情報
 'status': open or filled or closed, 
 'filled': filled size,
 'remaining': remaining,
-'amount': order size, 
+'quantity': order size, 
 'price': order price,
 'side':sell or buy,
 'indicate':,
@@ -91,7 +91,7 @@ order情報
 # 注文関係の関数
 
 # 関数内で作成する注文情報の項目
-order_col={'id', 'status', 'filled', 'remaining', 'amount', 'price', 'side'}
+order_col={'id', 'status', 'filled', 'remaining', 'quantity', 'price', 'side'}
 
 # 成行注文する関数
 def market(side, size,pair='BTC/JPY'):
@@ -103,8 +103,9 @@ def market(side, size,pair='BTC/JPY'):
             print(e,sys._getframe().f_code.co_name)
             time.sleep(1)
     ret={}
-    for key in order_col:
-        ret[key]=value[key]
+    ret={'id':value['id'], 'status':'canceled',
+        'filled':value['filled'], 'remaining':value['remaining'],
+        'quantity':value['remaining']+value['filled'],'price':value['price'],'side':value['side']}
     return ret
 
 # 指値注文する関数
@@ -118,8 +119,9 @@ def limit(side, size, price,pair='BTC/JPY'):
             time.sleep(1)
     # return value
     ret={}
-    for key in order_col:
-        ret[key]=value[key]
+    ret={'id':value['id'], 'status':'canceled',
+        'filled':value['filled'], 'remaining':value['remaining'],
+        'quantity':value['remaining']+value['filled'],'price':value['price'],'side':value['side']}
     return ret
 
 # 指値注文する関数（レバレッジ）
@@ -174,15 +176,18 @@ def limit_leverage(side,size,price,timestamp=None,leverage_level=2):
             time.sleep(1)
     ret={'id':value['id'], 'status':'open',  # liquid上では注文状況はlive,filled,canceledだが、ccxtのopen,closed,canceledに合わせる
         'filled':0., 'remaining':size,
-        'amount':size,'price':price,'side':side}
+        'quantity':size,'price':price,'side':side}
     return ret
+    
+def edit_order_pool(params):
+    order_id,price,size,timestamp=params
+    return edit_order(order_id,price,size,timestamp)
 
 def edit_order(order_id,price=None,size=None,timestamp=None):
     path = f'/orders/{order_id}'
-    query = ''
     while True:
         try:
-            url = 'https://api.liquid.com' + path + query
+            url = 'https://api.liquid.com' + path
             if timestamp is None:timestamp = datetime.datetime.now().timestamp()
             payload = {
                 "path": path,
@@ -206,13 +211,13 @@ def edit_order(order_id,price=None,size=None,timestamp=None):
             value = json.loads(res.text)
             break
         except Exception as e:
-            print(e,res,sys._getframe().f_code.co_name)
+            print(e,sys._getframe().f_code.co_name)
             timestamp+=1
             time.sleep(1)
     if 'id' not in value:return None # 約定済み
     ret={'id':value['id'], 'status':'open',  # liquid上では注文状況はlive,filled,canceledだが、ccxtのopen,closed,canceledに合わせる
-        'filled':0., 'remaining':size,
-        'amount':size,'price':price,'side':value['side']}
+        'filled':float(value['filled_quantity']), 'remaining':size-float(value['filled_quantity']),
+        'quantity':size,'price':price,'side':value['side']}
     return ret
 
 # 注文をキャンセルする関数
@@ -220,12 +225,39 @@ def cancel_order(order_id,pair='BTC/JPY'):
     try:
         value=exchange.cancelOrder(symbol = pair, id = order_id)
     except Exception as e:
-        # 指値が約定していた(=キャンセルが通らなかった)場合、Noneを返す。
+        # キャンセルが通らなかった場合、Noneを返す。約定している。
         return None
     ret={}
-    for key in order_col:
-        ret[key]=value[key]
+    ret={'id':value['id'], 'status':'canceled',
+        'filled':value['filled'], 'remaining':value['remaining'],
+        'quantity':value['remaining']+value['filled'],'price':value['price'],'side':value['side']}
     return ret
+
+# 注文をキャンセルする関数
+def cancel_order_liquid(order_id,pair='BTC/JPY',timestamp=None):
+    while True:
+        try:
+            path = f'/orders/{order_id}/cancel'
+            url = f'https://api.liquid.com{path}'
+            if timestamp is None:timestamp=datetime.datetime.now().timestamp()
+            payload = {
+                "path": path,
+                "nonce": timestamp,
+                "token_id": token
+            }
+            signature = jwt.encode(payload, secret, algorithm='HS256')
+            headers = {
+                'X-Quoine-API-Version': '2',
+                'X-Quoine-Auth': signature,
+                'Content-Type' : 'application/json'
+            }
+            res = requests.put(url, headers=headers)
+            data = json.loads(res.text)
+            break
+        except Exception as e:
+            print(e)
+            timestamp+=1
+    return data
 
 
 # 注文を確認
@@ -240,9 +272,10 @@ def get_orders(status=None,pair='BTC/JPY'):
     ret=[]
     for order in orders:
         d={}
-        for key in order_col:
-            d[key]=order[key]
-        ret.append(d.copy())
+        d={'id':order['id'], 'status':order['status'],
+            'filled':order['filled'], 'remaining':order['remaining'],
+            'quantity':order['remaining']+order['filled'],'price':order['price'],'side':order['side']}
+        ret.append(d)
     return ret
 
 
@@ -262,8 +295,9 @@ def get_order(order_id):
             time.sleep(1)
     if value is None:return None # 指定した注文が存在しない。
     ret={}
-    for key in order_col:
-        ret[key]=value[key]
+    ret={'id':value['id'], 'status':'canceled',
+        'filled':value['filled'], 'remaining':value['remaining'],
+        'quantity':value['remaining']+value['filled'],'price':value['price'],'side':value['side']}
     return ret
 
 
@@ -432,5 +466,5 @@ def executions_to_ohlcv(q1,q2):
                 ohlcv[1]=-1
 
 # test
-if __name__=='__main__':
+if __name__=='__main__1':
     pass
