@@ -94,7 +94,7 @@ order情報
 order_col={'id', 'status', 'filled', 'remaining', 'quantity', 'price', 'side'}
 
 # 成行注文する関数
-def market(side, size,pair='BTC/JPY'):
+def market(side,size,pair='BTC/JPY'):
     while True:
         try:
             value = exchange.create_order(pair, type = 'market', side = side, amount = size)
@@ -103,13 +103,64 @@ def market(side, size,pair='BTC/JPY'):
             print(e,sys._getframe().f_code.co_name)
             time.sleep(1)
     ret={}
-    ret={'id':value['id'], 'status':'canceled',
+    ret={'id':str(value['id']), 'status':'canceled',
         'filled':value['filled'], 'remaining':value['remaining'],
         'quantity':value['remaining']+value['filled'],'price':value['price'],'side':value['side']}
     return ret
 
+def market_leverage(side,size,timestamp=None,leverage_level=2):
+    path = '/orders/'
+    query = ''
+    url = 'https://api.liquid.com' + path + query
+    if timestamp is None:timestamp = datetime.datetime.now().timestamp()
+    payload = {
+        "path": path,
+        #"nonce": timestamp,
+        "token_id": token
+    }
+    signature = jwt.encode(payload, secret, algorithm='HS256')
+    headers = {
+        'X-Quoine-API-Version': '2',
+        'X-Quoine-Auth': signature,
+        'Content-Type' : 'application/json'
+    }
+    data = {
+        "order":{
+        "order_type":"market",
+        "margin_type":"cross",
+        "product_id":5,
+        "side":side,
+        "quantity":size,
+        "leverage_level":leverage_level,
+        "funding_currency":'JPY',
+        "order_direction":'netout',
+        "client_order_id": timestamp
+        }
+    }
+    json_data = json.dumps(data)
+
+    while True:
+        try:
+            res = requests.post(url, headers=headers, data=json_data)
+            value = json.loads(res.text)
+            if 'id' not in value:
+                print(value)
+                timestamp = datetime.datetime.now().timestamp()
+                continue
+            break
+        except Exception as e:
+            print(e,sys._getframe().f_code.co_name)
+            time.sleep(1)
+    ret={'id':str(value['id']), 'status':'open',  # liquid上では注文状況はlive,filled,canceledだが、ccxtのopen,closed,canceledに合わせる
+        'filled':0., 'remaining':size,
+        'quantity':size,'price':value['price'],'side':side}
+    return ret
+if __name__=='__main__':
+    value=market_leverage('buy',0.0001)
+    pprint(value)
+
 # 指値注文する関数
-def limit(side, size, price,pair='BTC/JPY'):
+def limit(side,size,price,pair='BTC/JPY'):
     while True:
         try:
             value = exchange.create_order(pair, type = 'limit', side = side, amount = size, price = price)
@@ -119,10 +170,11 @@ def limit(side, size, price,pair='BTC/JPY'):
             time.sleep(1)
     # return value
     ret={}
-    ret={'id':value['id'], 'status':'canceled',
+    ret={'id':str(value['id']), 'status':'canceled',
         'filled':value['filled'], 'remaining':value['remaining'],
         'quantity':value['remaining']+value['filled'],'price':value['price'],'side':value['side']}
     return ret
+
 
 # 指値注文する関数（レバレッジ）
 def limit_leverage_pool(params):
@@ -174,7 +226,7 @@ def limit_leverage(side,size,price,timestamp=None,leverage_level=2):
         except Exception as e:
             print(e,sys._getframe().f_code.co_name)
             time.sleep(1)
-    ret={'id':value['id'], 'status':'open',  # liquid上では注文状況はlive,filled,canceledだが、ccxtのopen,closed,canceledに合わせる
+    ret={'id':str(value['id']), 'status':'open',  # liquid上では注文状況はlive,filled,canceledだが、ccxtのopen,closed,canceledに合わせる
         'filled':0., 'remaining':size,
         'quantity':size,'price':price,'side':side}
     return ret
@@ -272,7 +324,7 @@ def get_orders(status=None,pair='BTC/JPY'):
     ret=[]
     for order in orders:
         d={}
-        d={'id':order['id'], 'status':order['status'],
+        d={'id':str(order['id']), 'status':order['status'],
             'filled':order['filled'], 'remaining':order['remaining'],
             'quantity':order['remaining']+order['filled'],'price':order['price'],'side':order['side']}
         ret.append(d)
@@ -295,7 +347,7 @@ def get_order(order_id):
             time.sleep(1)
     if value is None:return None # 指定した注文が存在しない。
     ret={}
-    ret={'id':value['id'], 'status':'canceled',
+    ret={'id':str(value['id']), 'status':'canceled',
         'filled':value['filled'], 'remaining':value['remaining'],
         'quantity':value['remaining']+value['filled'],'price':value['price'],'side':value['side']}
     return ret
@@ -313,9 +365,12 @@ def get_some_orders(order_ids):
             break
         except Exception as e:
             print(e,sys._getframe().f_code.co_name)
+            print(order_ids)
             time.sleep(1)
 
-    if len(value)==0:return None # 指定した注文が存在しない。
+    if len(value)==0:# 指定した注文が存在しない。基本的にありえない
+        print(order_ids)
+        return []
     return value
 
 # ポジション関係の関数
@@ -357,13 +412,13 @@ def get_trade_status(trade_id):
     return None # 指定したポジションがない
 
 # 指定したidのポジションをクローズする。
-def position_close(trade_id):
+def position_close(trade_id,timestamp=None):
 
     path = f'/trades/{trade_id}/close/'
     query = ''
 
     url = 'https://api.liquid.com' + path + query
-    timestamp = datetime.datetime.now().timestamp()
+    if timestamp is None:timestamp = datetime.datetime.now().timestamp()
     payload = {
         "path": path,
         "nonce": timestamp,

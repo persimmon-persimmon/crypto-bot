@@ -138,9 +138,9 @@ if __name__=='__main__':
     q1=Queue()
     output_encoding = "shift_jis"
     jst=datetime.timezone(datetime.timedelta(hours=9), "JST")
-    ymd=datetime.datetime.now(jst).strftime('%Y%m%d')
-    ohlcv_file=f'ohlcv_{ymd}.csv'
-    book_file=f'book_{ymd}.csv'
+    ymdh=datetime.datetime.now(jst).strftime('%Y%m%d_%H')
+    ohlcv_file=f'ohlcv_{ymdh}.csv'
+    book_file=f'book_{ymdh}.csv'
     with open(os.path.join(current_dir,ohlcv_file),'w',encoding=output_encoding) as f:
         header=['timestamp','datetime_jst','open','high','low','close','volume','buy_volume','sell_volume','first_execution_id','last_execution_id']
         writer=csv.writer(f)
@@ -166,11 +166,11 @@ if __name__=='__main__':
         counter+=1
         ohlcv=q1.get()
         book=q1.get()
-        nymd=datetime.datetime.fromtimestamp(ohlcv[0],jst).strftime('%Y%m%d')
-        if ymd!=nymd:
-            ymd=nymd
-            ohlcv_file=f'ohlcv_{ymd}.csv'
-            book_file=f'book_{ymd}.csv'
+        nymdh=datetime.datetime.fromtimestamp(ohlcv[0],jst).strftime('%Y%m%d_%H')
+        if ymdh!=nymdh:
+            ymdh=nymdh
+            ohlcv_file=f'ohlcv_{ymdh}.csv'
+            book_file=f'book_{ymdh}.csv'
             with open(os.path.join(current_dir,ohlcv_file),'w',encoding=output_encoding) as f:
                 header=['timestamp','datetime_jst','open','high','low','close','volume','buy_volume','sell_volume','first_execution_id','last_execution_id']
                 writer=csv.writer(f)

@@ -149,16 +149,49 @@ def log_writer(q_log):
         # ログ書き込み
         logger.info(v)
 
+# 板情報を累積にする
+# row=[timestamp]+[ask_price,ask_quantity]*21+[bid_price,bid_quantity]*21
+# ->ask_ary,bid_ary :それぞれbest_priceからlap円刻みの累積量n個分
+def book_to_accumulation(row,lap=100,n=10):
+    now_price=row[1]
+    now_quantity=row[2]
+    idx=3
+    ask_ary=[now_quantity]
+    while idx<42:
+        if row[idx]<now_price+lap:
+            ask_ary[-1]+=row[idx+1]
+            idx+=2
+        else:
+            now_price+=lap
+            ask_ary.append(ask_ary[-1])
+            if len(ask_ary)==n:break
+    while len(ask_ary)<n:ask_ary.append(ask_ary[-1])
+    now_price=row[43]
+    now_quantity=row[44]
+    idx=45
+    bid_ary=[now_quantity]
+    while idx<84:
+        if row[idx]>now_price-lap:
+            bid_ary[-1]+=row[idx+1]
+            idx+=2
+        else:
+            now_price-=lap
+            bid_ary.append(bid_ary[-1])
+            if len(bid_ary)==n:break
+    while len(bid_ary)<n:bid_ary.append(bid_ary[-1])
+    return ask_ary,bid_ary
+
 # ハイパーパラメータ
 @dataclass
 class Paras:
     delta:int=10 # best priceに対するorder price
     allow_dd:float=0.8 # 許容ドローダウン
     lot:float=0.0001 # 一度の注文量
-    entry_spread:int=750
+    entry_spread:int=800
     cut_return:int=200 # ポジションの期待リターンがこれを下回っていたら決済する。
     leverage_level:int=2
-    retry_num:int=15
+    loop_num:int=30
+
 
 #処理フロー
 #(1).スプレッドが一定以上ならロングとショート両方の指値注文を入れる。
@@ -167,14 +200,6 @@ class Paras:
 #(4).両方未約定でスプレッドが一定以上なら注文の価格をbest_priceに合わせて編集し、2に戻る。
 #(5).片方のみ約定なら、未約定の注文の価格をbest_priceに合わせて編集する。これを約定するまで続け、約定すれば(1)に戻る。
 #    ただし期待リターンが低い場合、ポジションをクローズして(1)に戻る。
-
-if __name__=='__main__1':
-
-    value=get_trades(status='closed')
-    ret=value[0]['pnl']
-    pprint(value[0])
-    pprint(value[1])
-
 
 if __name__=='__main__':
     paras=Paras()
@@ -230,7 +255,7 @@ if __name__=='__main__':
                 max_asset=max(now_asset,max_asset)
 
                 # テスト稼働用。一定数のループでbreak
-                if loop_count>20:break
+                if loop_count>paras.loop_num:break
             
             #(1).スプレッドが一定以上ならロングとショート両方の指値注文を入れる。
             if mh.book_newest['asks'][0][0]-mh.book_newest['bids'][0][0]<paras.entry_spread:
@@ -320,14 +345,16 @@ if __name__=='__main__':
         #(5).片方のみ約定なら、未約定の注文の価格をbest_priceに合わせて編集する。これを約定するまで続け、約定すれば(1)に戻る。
         #    ただし期待リターンが低い場合、ポジションをクローズして(1)に戻る。
         if sell_order['status']=='open' and buy_order['status']=='closed':
+            s=datetime.datetime.now().timestamp()
             while True:
                 best_ask=mh.book_newest['asks'][0][0]
                 best_bid=mh.book_newest['bids'][0][0]
                 now_entry['close_cost']=best_bid-buy_order['price']
                 now_entry['exp_return']=buy_order['price']-best_bid-paras.delta
                 # 期待リターンと決済コストを比較、期待リターンが小さくなったら決済。
-                #if now_entry['close_cost']<paras.cut_return:
-                if now_entry['exp_return']<now_entry['close_cost']:
+                #if now_entry['exp_return']<paras.cut_return:
+                #if now_entry['exp_return']<now_entry['close_cost']:
+                if datetime.datetime.now().timestamp()-s>=5:
                     # 注文をキャンセルし、ポジションを決済
                     f_order=executor.submit(cancel_order,(sell_order['id']))
                     f_position=executor.submit(position_close_all)
@@ -389,14 +416,16 @@ if __name__=='__main__':
 
 
         if sell_order['status']=='closed' and buy_order['status']=='open':
+            s=datetime.datetime.now().timestamp()
             while True:
                 best_ask=mh.book_newest['asks'][0][0]
                 best_bid=mh.book_newest['bids'][0][0]
                 now_entry['close_cost']=best_ask-sell_order['price']
                 now_entry['exp_return']=sell_order['price']-best_bid-paras.delta
                 # 期待リターンと決済コストを比較、期待リターンが小さくなったら決済。
-                #if now_entry['close_cost']<paras.cut_return:
-                if now_entry['exp_return']<now_entry['close_cost']:
+                #if now_entry['exp_return']<paras.cut_return:
+                #if now_entry['exp_return']<now_entry['close_cost']:
+                if datetime.datetime.now().timestamp()-s>=5:
                     # 注文をキャンセルし、ポジションを決済
                     f_order=executor.submit(cancel_order,(buy_order['id']))
                     f_position=executor.submit(position_close_all)
