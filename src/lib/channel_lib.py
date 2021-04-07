@@ -115,12 +115,21 @@ try:
         secret=ary[1]
 except:
     pass
-
+status_dict={'live':'open','filled':'closed','canceled':'canceled'}
 # private order
 def channel_user_order(q):
     def update_callback(data):
         data=json.loads(data)
-        q.put(data)
+        value={'id':data['id']
+                ,'status':status_dict[data['status']]
+                ,'filled':data['filled_quantity']
+                ,'remaining':data['quantity']-data['filled_quantity']
+                ,'quantity':data['quantity']
+                ,'price':data['price']
+                ,'side':data['side']
+                ,'timestamp':data['created_at']
+                }
+        q.put(value)
     def on_connect(data):
         tap.pusher.subscribe("user_account_jpy_orders").bind('updated', update_callback)
     tap = liquidtap.Client(token,secret)
@@ -166,18 +175,19 @@ if __name__=='__main__':
     # プロセス設定
     q=Queue()
     #p1=Process(target=channel_user_order,args=(q,))
-    p1=Process(target=channel_user_trade,args=(q,))
+    #p1=Process(target=channel_user_trade,args=(q,))
     #p1=Process(target=channel_user_execution,args=(q,))
-    #p1=Process(target=channel_user_order,args=(q,))
+    p1=Process(target=channel_user_order,args=(q,))
     
     #p0=Process(target=data_handle,args=(q,))
     p1.start()
     #p2.start()
     #p3.start()
     #p0.start()
-    for _ in range(10):
+    for _ in range(1):
         v=q.get()
         print(v)
         #time.sleep(10)
+    print(datetime.datetime.now().timestamp())
     p1.terminate()
     #p0.terminate()

@@ -76,7 +76,7 @@ def get_free_balance(timestamp=None):
 order情報
 {
 'id': order id,
-'status': open or filled or closed, 
+'status': open or closed or closed, 
 'filled': filled size,
 'remaining': remaining,
 'quantity': order size, 
@@ -144,7 +144,6 @@ def market_leverage(side,size,timestamp=None,leverage_level=2):
             res = requests.post(url, headers=headers, data=json_data)
             value = json.loads(res.text)
             if 'id' not in value:
-                print(value)
                 timestamp = datetime.datetime.now().timestamp()
                 continue
             break
@@ -368,8 +367,7 @@ def get_some_orders(order_ids):
             print(order_ids)
             time.sleep(1)
 
-    if len(value)==0:# 指定した注文が存在しない。基本的にありえない
-        print(order_ids)
+    if len(value)==0:# 指定した注文が存在しない。取得できる注文は最新20件なので起こりうる
         return []
     return value
 
