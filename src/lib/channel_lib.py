@@ -9,6 +9,13 @@ from pprint import pprint
 import os
 import json
 
+import argparse
+import csv
+import pytz
+import traceback
+from quoine.client import Quoinex
+from collections import deque
+
 # マーケット情報 
 def channel_market(q): 
     def update_callback_market(data): 
@@ -166,18 +173,65 @@ def channel_user_execution(q):
 
 
 
-# test
-def data_handle(q):
-    data=q.get()
-    print(data)
+def fetch_executions(timestamp, limit=1000, product_id=5):
+    api = Quoinex("", "")
+    retry_count = 0
+    while True:
+        try:
+            results = api.get_executions_since_time(product_id, timestamp, limit=limit)
+            return [{"id": item["id"],
+                    "timestamp": float(item["created_at"]),
+                    "taker_side": str(item["taker_side"]),
+                    "price": float(item["price"]),
+                    "quantity": float(item["quantity"])} for item in results]
+        except Exception as e:
+            retry_count += 1
+            if retry_count <= 3:
+                print("エラーが発生しました. 10秒待機して再トライします.",e)
+                time.sleep(10)
+            else:
+                print("エラーが発生しました. 停止します.")
+                raise e
+
+# qに指定期間の約定情報をputする
+def virtual_channel_execution_details_cash(q,start_timestamp=None,end_timestamp=None):
+    if start_timestamp is None:
+        start_timestamp=datetime.datetime.now()-datetime.timedelta(days=5)
+        start_timestamp=datetime.datetime.strptime('202104010000','%Y%m%d%H%M')
+
+        start_timestamp=start_timestamp.timestamp()
+    if end_timestamp is None:
+        end_timestamp=datetime.datetime.now()-datetime.timedelta(minutes=50)
+        end_timestamp=datetime.datetime.strptime('202104040000','%Y%m%d%H%M')
+        end_timestamp=end_timestamp.timestamp()
     
+    jst = datetime.timezone(datetime.timedelta(hours=9), "JST")
+    datetime_format = "%Y-%m-%d %H:%M:%S"
+    counter = 0
+    pre_timestamp = start_timestamp - 1
+    while True:
+        if counter%100==0:
+            now = datetime.datetime.fromtimestamp(start_timestamp, tz=jst).astimezone(jst).strftime(datetime_format)
+        counter+=1
+        if start_timestamp > end_timestamp:
+            break
+        executions = fetch_executions(start_timestamp)
+        if len(executions) == 0:
+            break
+        for execution in executions:
+            q.put(execution)
+        start_timestamp = executions[-1]['timestamp'] + 1
+        time.sleep(1)
+
+
 if __name__=='__main__':
     # プロセス設定
     q=Queue()
     #p1=Process(target=channel_user_order,args=(q,))
     #p1=Process(target=channel_user_trade,args=(q,))
     #p1=Process(target=channel_user_execution,args=(q,))
-    p1=Process(target=channel_user_order,args=(q,))
+    #p1=Process(target=channel_user_order,args=(q,))
+    p1=Process(target=virtual_channel_execution_details_cash,args=(q,))
     
     #p0=Process(target=data_handle,args=(q,))
     p1.start()
