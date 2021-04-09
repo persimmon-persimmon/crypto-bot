@@ -35,7 +35,6 @@ class CandleManager:
         now=int(float(v['timestamp']))
         ohlcv={}
         ohlcv['timestamp']=now
-        ohlcv['datetime']=datetime.datetime.fromtimestamp(now,JST)
         ohlcv['open']=v['price']
         ohlcv['high']=v['price']
         ohlcv['low']=v['price']
@@ -60,7 +59,7 @@ class CandleManager:
                 ohlcv['high']=max(ohlcv['high'],v['price'])
                 ohlcv['low']=min(ohlcv['low'],v['price'])
                 ohlcv['close']=v['price']
-                ohlcv['volume']=v['price']*v['quantity']
+                ohlcv['volume']+=v['price']*v['quantity']
                 if v['taker_side']=='buy':
                     ohlcv['buy_volume']+=v['price']*v['quantity']
                 else:
@@ -75,7 +74,6 @@ class CandleManager:
                     last_id=ohlcv['last_execution_id']
                     ohlcv={}
                     ohlcv['timestamp']=now
-                    ohlcv['datetime']=datetime.datetime.fromtimestamp(now,JST)
                     ohlcv['open']=close_price
                     ohlcv['high']=close_price
                     ohlcv['low']=close_price
@@ -86,7 +84,6 @@ class CandleManager:
                     ohlcv['first_execution_id']=last_id
                     ohlcv['last_execution_id']=last_id
                 ohlcv['timestamp']=now
-                ohlcv['datetime']=datetime.datetime.fromtimestamp(now,JST)
                 ohlcv['open']=v['price']
                 ohlcv['high']=v['price']
                 ohlcv['low']=v['price']
@@ -156,6 +153,82 @@ class OrderManager:
         while self.end_flg==0:
             try:
                 order=self.q_user_order.get(timeout=5)
+            except:
+                continue
+            if order['timestamp']<self.start_timestamp:continue
+            pre=self.order_dict[order['id']]['filled'] if order['id'] in self.order_dict else 0.
+            self.order_dict[order['id']]=order
+            if order['side']=='buy':
+                self.stock+=order['filled']-pre
+                self.buy_executed_quantity+=order['filled']-pre
+                self.jpy_delta-=(order['filled']-pre)*order['price']
+            else:
+                self.stock-=order['filled']-pre
+                self.sell_executed_quantity+=order['filled']-pre
+                self.jpy_delta+=(order['filled']-pre)*order['price']
+            if order['status']=='closed':
+                self.order_dict.pop(order['id'])
+            self.stock=round(self.stock,8)
+
+    def limit_order(self,args):
+        value=self.executor.map(limit_leverage_pool,args)
+        for order in value:
+            if order['side']=='sell':
+                self.sell_order_quantity+=order['quantity']
+                self.sell_executed_quantity+=order['filled']
+            else:
+                self.buy_order_quantity+=order['quantity']
+                self.buy_executed_quantity+=order['filled']
+        return value
+
+    """開発中。cancel_orderを平行実行できるようにする。
+    # 指定したsideのオーダーをキャンセル
+    def cancel_order(self,side=None):
+        if side is None:
+            args=[order['id'] for order in self.order_dict]
+        elif side=='sell':
+            args=[order['id'] for order in self.order_dict if order['side']=='sell']
+        elif side=='buy':
+            args=[order['id'] for order in self.order_dict if order['side']=='buy']
+        values=
+    """
+    # 指定したポジションをクローズする。
+    def position_close_all(self):
+        pass
+
+    def average_price(self):
+        if abs(self.stock)<1e-5:return None
+        return self.jpy_delta/self.stock
+
+    def join(self,):
+        self.end_flg=1
+        self.t_user_order.join()
+        self.executor.shutdown()
+
+
+# 注文を取り仕切る。WebSocketから流れてくる情報をキャッチし注文状況を更新する。在庫管理も行う。
+class OrderManagerBacktest:
+    def __init__(self,q_execution,params):
+        self.params=params
+        self.execute_ratio=params.execute_ratio
+        self.q_exeqution=q_execution
+        self.order_dict={}
+        self.stock=0.
+        self.end_flg=0
+        self.sell_executed_quantity=0
+        self.buy_executed_quantity=0
+        self.sell_order_quantity=0
+        self.buy_order_quantity=0
+        self.jpy_delta=0
+        self.executor=ThreadPoolExecutor(max_workers=4)
+        self.start_timestamp=datetime.datetime.now().timestamp()
+        self.t_user_order=Thread(target=self.get_user_order)
+        self.t_user_order.start()
+
+    def get_user_order(self,):
+        while self.end_flg==0:
+            try:
+                order=self.q_exeqution.get(timeout=5)
             except:
                 continue
             if order['timestamp']<self.start_timestamp:continue
@@ -325,8 +398,14 @@ def downsample_ohlcv(ohlcv,n):
         tmp=ohlcv[i][:]
         for j in range(1,n):
             tmp[0]=ohlcv[i+j][0]
-            tmp[2]=max(tmp[2],ohlcv[i+j][2])
-            tmp[3]=min(tmp[3],ohlcv[i+j][3])
+            if ohlcv[i+j][5]==0:continue
+            if tmp[5]==0:
+                tmp[1]=ohlcv[i+j][3]
+                tmp[2]=ohlcv[i+j][2]
+                tmp[3]=ohlcv[i+j][3]
+            else:
+                tmp[2]=max(tmp[2],ohlcv[i+j][2])
+                tmp[3]=min(tmp[3],ohlcv[i+j][3])
             tmp[4]=ohlcv[i+j][4]
             tmp[5]+=ohlcv[i+j][5]
             tmp[6]+=ohlcv[i+j][6]

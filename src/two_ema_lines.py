@@ -195,7 +195,7 @@ if __name__=='__main__':
                 print('SHORT!!',d)
         else:
             if now_entry['side']=='buy':
-                if now_entry['best_return']*0.9>now_entry['price']-ohlcv['close']:
+                if now_entry['best_return']*0.95>now_entry['price']-ohlcv['close']:
                     now_asset+=stock*ohlcv['close']
                     stock=0
                     now_entry['side']='None'
@@ -203,7 +203,7 @@ if __name__=='__main__':
                 else:
                     now_entry['best_return']=max(now_entry['best_return'],now_entry['price']-ohlcv['close'])
             if now_entry['side']=='sell':
-                if now_entry['best_return']*0.9>-now_entry['price']+ohlcv['close']:
+                if now_entry['best_return']*0.95>-now_entry['price']+ohlcv['close']:
                     now_asset+=stock*ohlcv['close']
                     stock=0
                     now_entry['side']='None'

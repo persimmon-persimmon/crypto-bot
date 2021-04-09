@@ -193,8 +193,8 @@ def fetch_executions(timestamp, limit=1000, product_id=5):
                 print("エラーが発生しました. 停止します.")
                 raise e
 
-# qに指定期間の約定情報をputする
-def virtual_channel_execution_details_cash(q,start_timestamp=None,end_timestamp=None):
+# qに指定期間の約定情報をputする。apiで取得する。
+def virtual_channel_execution_details_cash_api(q,start_timestamp=None,end_timestamp=None):
     if start_timestamp is None:
         start_timestamp=datetime.datetime.now()-datetime.timedelta(days=5)
         start_timestamp=datetime.datetime.strptime('202104010000','%Y%m%d%H%M')
@@ -205,7 +205,91 @@ def virtual_channel_execution_details_cash(q,start_timestamp=None,end_timestamp=
         end_timestamp=datetime.datetime.strptime('202104040000','%Y%m%d%H%M')
         end_timestamp=end_timestamp.timestamp()
     
+    counter = 0
+    while True:
+        counter+=1
+        if start_timestamp > end_timestamp:
+            break
+        executions = fetch_executions(start_timestamp)
+        if len(executions) == 0:
+            break
+        for execution in executions:
+            q.put(execution)
+        start_timestamp = executions[-1]['timestamp'] + 1
+        time.sleep(1)
+
+# qに指定期間の約定情報をputする。datファイルから取得する。
+def virtual_channel_execution_details_cash(q,start_timestamp=None,end_timestamp=None):
+    if start_timestamp is None:
+        start_timestamp=datetime.datetime.now()-datetime.timedelta(days=5)
+        start_timestamp=datetime.datetime.strptime('202104010000','%Y%m%d%H%M')
+        start_timestamp=start_timestamp.timestamp()
+    if end_timestamp is None:
+        end_timestamp=datetime.datetime.now()-datetime.timedelta(minutes=50)
+        end_timestamp=datetime.datetime.strptime('202104040000','%Y%m%d%H%M')
+        end_timestamp=end_timestamp.timestamp()
+    
     jst = datetime.timezone(datetime.timedelta(hours=9), "JST")
+    start_datetime=datetime.datetime.fromtimestamp(start_timestamp,jst)
+    end_datetime=datetime.datetime.fromtimestamp(end_timestamp,jst)
+    files=[]
+    while start_datetime<end_datetime:
+        ymdh=datetime.datetime.strftime(start_datetime,'%Y%m%d_%H')
+        files.append(f'execution_{ymdh}.dat')
+        start_datetime+=datetime.timedelta(hours=1)
+    current_dir=os.path.dirname(os.path.realpath(__file__))
+    for fl in files:
+        with open(os.path.join(current_dir,fl)) as f:
+            data=f.readlines()
+        for d in data:
+            q.put(json.loads(d))
+
+# qに指定期間の板情報をputする。datファイルから取得する。
+def virtual_channel_price_ladders(q,start_timestamp=None,end_timestamp=None):
+    if start_timestamp is None:
+        start_timestamp=datetime.datetime.now()-datetime.timedelta(days=5)
+        start_timestamp=datetime.datetime.strptime('202104010000','%Y%m%d%H%M')
+        start_timestamp=start_timestamp.timestamp()
+    if end_timestamp is None:
+        end_timestamp=datetime.datetime.now()-datetime.timedelta(minutes=50)
+        end_timestamp=datetime.datetime.strptime('202104040000','%Y%m%d%H%M')
+        end_timestamp=end_timestamp.timestamp()
+    
+    jst = datetime.timezone(datetime.timedelta(hours=9), "JST")
+    start_datetime=datetime.datetime.fromtimestamp(start_timestamp,jst)
+    end_datetime=datetime.datetime.fromtimestamp(end_timestamp,jst)
+    files=[]
+    while start_datetime<end_datetime:
+        ymdh=datetime.datetime.strftime(start_datetime,'%Y%m%d_%H')
+        files.append(f'book_{ymdh}.dat')
+        start_datetime+=datetime.timedelta(hours=1)
+
+    current_dir=os.path.dirname(os.path.realpath(__file__))
+    for fl in files:
+        with open(os.path.join(current_dir,fl)) as f:
+            data=f.readlines()
+        for d in data:
+            q.put(json.loads(d))
+
+# qに指定期間の1秒ローソク足と板情報をputする
+def virtual_channel_ohlcv_and_book(q_ohlcv,q_book,start_timestamp=None,end_timestamp=None):
+    if start_timestamp is None:
+        start_timestamp=datetime.datetime.now()-datetime.timedelta(days=5)
+        start_timestamp=datetime.datetime.strptime('202104010000','%Y%m%d%H%M')
+        start_timestamp=start_timestamp.timestamp()
+    if end_timestamp is None:
+        end_timestamp=datetime.datetime.now()-datetime.timedelta(minutes=50)
+        end_timestamp=datetime.datetime.strptime('202104040000','%Y%m%d%H%M')
+        end_timestamp=end_timestamp.timestamp()
+    # 指定された期間のdatファイルを列挙
+    ymd_h=datetime.fromtimestamp(start_timestamp)
+    ymd_h=datetime.datetime.fromtimestamp(st,jst)
+    book_dat=[]
+    ohlcv_dat=[]
+    start_datetime=datetime.datetime.fromtimestamp(start_timestamp,jst)
+    datetime.datetime.strftime(start_datetime,'%y%m%d_%H')
+
+    jst=datetime.timezone(datetime.timedelta(hours=9), "JST")
     datetime_format = "%Y-%m-%d %H:%M:%S"
     counter = 0
     pre_timestamp = start_timestamp - 1
@@ -223,7 +307,6 @@ def virtual_channel_execution_details_cash(q,start_timestamp=None,end_timestamp=
         start_timestamp = executions[-1]['timestamp'] + 1
         time.sleep(1)
 
-
 if __name__=='__main__':
     # プロセス設定
     q=Queue()
@@ -231,14 +314,20 @@ if __name__=='__main__':
     #p1=Process(target=channel_user_trade,args=(q,))
     #p1=Process(target=channel_user_execution,args=(q,))
     #p1=Process(target=channel_user_order,args=(q,))
-    p1=Process(target=virtual_channel_execution_details_cash,args=(q,))
+    start_timestamp=datetime.datetime.strptime('202104091900','%Y%m%d%H%M')
+    start_timestamp=start_timestamp.timestamp()
+    end_timestamp=datetime.datetime.strptime('202104092000','%Y%m%d%H%M')
+    end_timestamp=end_timestamp.timestamp()
+    #virtual_channel_execution_details_cash(q,start_timestamp,end_timestamp)
+
+    p1=Process(target=virtual_channel_price_ladders,args=(q,start_timestamp,end_timestamp))
     
     #p0=Process(target=data_handle,args=(q,))
     p1.start()
     #p2.start()
     #p3.start()
     #p0.start()
-    for _ in range(1):
+    for _ in range(100):
         v=q.get()
         print(v)
         #time.sleep(10)

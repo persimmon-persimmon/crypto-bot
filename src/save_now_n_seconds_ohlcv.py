@@ -9,7 +9,7 @@ from pprint import pprint
 import time
 import os
 import csv
-
+import json
 
 
 def channel_connector(q_book,q_execution):
@@ -26,8 +26,8 @@ if __name__=='__main__':
     output_encoding = "shift_jis"
     jst=datetime.timezone(datetime.timedelta(hours=9), "JST")
     ymdh=datetime.datetime.now(jst).strftime('%Y%m%d_%H')
-    ohlcv_file=f'ohlcv_{ymdh}.csv'
-    book_file=f'book_{ymdh}.csv'
+    ohlcv_file=f'ohlcv_{ymdh}.dat'
+    book_file=f'book_{ymdh}.dat'
     cm=CandleManager(q_execution,q1,n=1)
     bm=BookManager(q_book)
     p1=Process(target=channel_connector,args=(q_book,q_execution))
@@ -45,18 +45,19 @@ if __name__=='__main__':
             if count==20:break
         if count==20:continue
         book=bm.book_dict[timestamp]
+        book['timestamp']=int(book['timestamp'])
         nymdh=datetime.datetime.fromtimestamp(ohlcv['timestamp'],jst).strftime('%Y%m%d_%H')
         if ymdh!=nymdh:
             ymdh=nymdh
-            ohlcv_file=f'ohlcv_{ymdh}.csv'
-            book_file=f'book_{ymdh}.csv'
+            ohlcv_file=f'ohlcv_{ymdh}.dat'
+            book_file=f'book_{ymdh}.dat'
 
         with open(os.path.join(current_dir,ohlcv_file),'a',encoding=output_encoding) as f:
-            f.write(str(ohlcv))
+            f.write(json.dumps(ohlcv))
             f.write('\n')
 
         with open(os.path.join(current_dir,book_file),'a',encoding=output_encoding) as f:
-            f.write(str(book))
+            f.write(json.dumps(book))
             f.write('\n')
 
     cm.join()
@@ -73,3 +74,5 @@ if __name__=='__main__1':
     for x in ohlcv:print(*x)
     print('after')
     for x in ret_ohlcv:print(*x)
+
+# sudo nohup python3 save_now_n_seconds_ohlcv.py &
