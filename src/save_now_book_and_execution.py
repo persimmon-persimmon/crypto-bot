@@ -22,13 +22,13 @@ def save_execution_json(q_execution):
     current_dir=os.path.dirname(__file__)
     jst=datetime.timezone(datetime.timedelta(hours=9), "JST")
     ymdh=datetime.datetime.now(jst).strftime('%Y%m%d_%H')
-    file_name=f'execution_{ymdh}.dat'
+    file_name=f'dat/execution_{ymdh}.dat'
     count=0
     output_encoding="shift_jis"
     while True:
         if count%10==0:
             ymdh=datetime.datetime.now(jst).strftime('%Y%m%d_%H')
-            file_name=f'execution_{ymdh}.dat'
+            file_name=f'dat/execution_{ymdh}.dat'
         v=q_execution.get()
         with open(os.path.join(current_dir,file_name),'a',encoding=output_encoding) as f:
             f.write(json.dumps(v))
@@ -37,7 +37,7 @@ def save_book_json(q_book):
     current_dir=os.path.dirname(__file__)
     jst=datetime.timezone(datetime.timedelta(hours=9), "JST")
     ymdh=datetime.datetime.now(jst).strftime('%Y%m%d_%H')
-    file_name=f'book_{ymdh}.dat'
+    file_name=f'dat/book_{ymdh}.dat'
     count=0
     output_encoding="shift_jis"
     pre=-1
@@ -46,9 +46,8 @@ def save_book_json(q_book):
     while True:
         if count%10==0:
             ymdh=datetime.datetime.now(jst).strftime('%Y%m%d_%H')
-            file_name=f'book_{ymdh}.dat'
+            file_name=f'dat/book_{ymdh}.dat'
         v=q_book.get()
-        v['timestamp']=float(v['timestamp'])
         if int(v['timestamp'])<int(pre)+n:continue
         pre=int(v['timestamp'])
         with open(os.path.join(current_dir,file_name),'a',encoding=output_encoding) as f:
@@ -68,16 +67,4 @@ if __name__=='__main__':
     while True:
         time.sleep(10)
 
-
-if __name__=='__main__1':
-    current_dir=os.path.dirname(__file__)
-    with open(os.path.join(current_dir,'ohlcv.csv'),'r') as f:
-        r=f.readlines()[1:]
-        ohlcv=[list(map(float,x.split(','))) for x in r]
-    ret_ohlcv=downsample_ohlcv(ohlcv,5)
-    print('before')
-    for x in ohlcv:print(*x)
-    print('after')
-    for x in ret_ohlcv:print(*x)
-
-# sudo nohup python3 save_now_n_seconds_ohlcv.py &
+# sudo nohup python3 save_now_book_and_execution.py &

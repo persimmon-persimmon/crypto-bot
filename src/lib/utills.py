@@ -15,7 +15,7 @@ import logging
 import numpy as np
 # リアルタイムでローソク足を記録するクラス。n秒足を作成。過去his_num個分の履歴を持つ。
 class CandleManager:
-    def __init__(self,q_execution,q1,his_num=20,n=5,backtest=False):
+    def __init__(self,q_execution,q1=None,his_num=20,n=5,backtest=False):
         self.q_execution=q_execution
         self.q1=q1
         self.his_num=his_num
@@ -52,7 +52,6 @@ class CandleManager:
             try:
                 v=self.q_execution.get(timeout=3)
             except:
-                if self.backtest==True:break
                 continue
             v['timestamp']=int(float(v['timestamp']))
             if v['timestamp']-now<self.n:
@@ -102,6 +101,7 @@ class CandleManager:
         self.end_flg=1
         self.t_ohlcv.join()
 
+
 # 一秒ごとの板情報。過去his_num個分の履歴を持つ。板情報の変更がない時刻に板情報は作られない。
 class BookManager:
     def __init__(self,q_book,his_num=200):
@@ -116,7 +116,10 @@ class BookManager:
     # 板情報
     def get_book(self):
         while self.end_flg==0:
-            v=self.q_book.get()
+            try:
+                v=self.q_book.get(timeout=1)
+            except:
+                continue
             v['asks']=[[float(x),float(y)] for x,y in v['asks']]
             v['bids']=[[float(x),float(y)] for x,y in v['bids']]
             v['timestamp']=float(v['timestamp'])
@@ -181,20 +184,24 @@ class OrderManager:
                 self.buy_executed_quantity+=order['filled']
         return value
 
-    """開発中。cancel_orderを平行実行できるようにする。
     # 指定したsideのオーダーをキャンセル
-    def cancel_order(self,side=None):
+    def om_cancel_order(self,side=None):
         if side is None:
             args=[order['id'] for order in self.order_dict]
         elif side=='sell':
             args=[order['id'] for order in self.order_dict if order['side']=='sell']
         elif side=='buy':
             args=[order['id'] for order in self.order_dict if order['side']=='buy']
-        values=
-    """
+        for order_id in args:
+            cancel_order_liquid(order_id)
+            self.order_dict.pop(order_id)
+    
     # 指定したポジションをクローズする。
-    def position_close_all(self):
-        pass
+    def om_position_close_all(self):
+        values=position_close_all()
+        for value in values:
+            pass
+        self.stock=0
 
     def average_price(self):
         if abs(self.stock)<1e-5:return None
@@ -208,78 +215,96 @@ class OrderManager:
 
 # 注文を取り仕切る。WebSocketから流れてくる情報をキャッチし注文状況を更新する。在庫管理も行う。
 class OrderManagerBacktest:
-    def __init__(self,q_execution,params):
+    def __init__(self,params):
         self.params=params
         self.execute_ratio=params.execute_ratio
-        self.q_exeqution=q_execution
         self.order_dict={}
         self.stock=0.
-        self.end_flg=0
         self.sell_executed_quantity=0
         self.buy_executed_quantity=0
         self.sell_order_quantity=0
         self.buy_order_quantity=0
         self.jpy_delta=0
-        self.executor=ThreadPoolExecutor(max_workers=4)
         self.start_timestamp=datetime.datetime.now().timestamp()
-        self.t_user_order=Thread(target=self.get_user_order)
-        self.t_user_order.start()
 
-    def get_user_order(self,):
-        while self.end_flg==0:
-            try:
-                order=self.q_exeqution.get(timeout=5)
-            except:
-                continue
-            if order['timestamp']<self.start_timestamp:continue
-            pre=self.order_dict[order['id']]['filled'] if order['id'] in self.order_dict else 0.
-            self.order_dict[order['id']]=order
-            if order['side']=='buy':
-                self.stock+=order['filled']-pre
-                self.buy_executed_quantity+=order['filled']-pre
-                self.jpy_delta-=(order['filled']-pre)*order['price']
-            else:
-                self.stock-=order['filled']-pre
-                self.sell_executed_quantity+=order['filled']-pre
-                self.jpy_delta+=(order['filled']-pre)*order['price']
-            if order['status']=='closed':
-                self.order_dict.pop(order['id'])
+    def put_execution(self,execution):
+        #execution=self.q_execution.get(timeout=5)
+        if not self.order_dict:return
+        # 自分の注文内に合致するものがあるか調べる。あれば更新。
+        keys=list(self.order_dict.keys())
+        for k in keys:
+            myorder=self.order_dict[k]
+            if myorder['timestamp']>=execution['timestamp']:continue
+            if execution['taker_side']=='buy':
+                if myorder['side']=='buy':continue
+                if execution['price']>=myorder['price']:
+                    # sell注文更新
+                    d=min(execution['quantity'],myorder['remaining'])
+                    myorder['filled']+=d
+                    myorder['remaining']-=d
+                    execution['quantity']-=d
+                    self.stock-=d
+                    self.sell_executed_quantity+=d
+                    self.jpy_delta+=d*myorder['price']
+                    if myorder['remaining']<=1e-6:
+                        self.order_dict.pop(myorder['id'])
+                    if execution['quantity']<=1e-6:
+                        break
+
+            if execution['taker_side']=='sell':
+                if myorder['side']=='sell':continue
+                if execution['price']<=myorder['price']:
+                    # buy注文更新
+                    d=min(execution['quantity'],myorder['remaining'])
+                    myorder['filled']+=d
+                    myorder['remaining']-=d
+                    execution['quantity']-=d
+                    self.stock+=d
+                    self.buy_executed_quantity+=d
+                    self.jpy_delta-=d*myorder['price']
+                    if myorder['remaining']<=1e-6:
+                        self.order_dict.pop(myorder['id'])
+                    if execution['quantity']<=1e-6:
+                        break
             self.stock=round(self.stock,8)
 
+    # ('sell',paras.lot,ask_price,timestamp,paras.leverage_level)
     def limit_order(self,args):
-        value=self.executor.map(limit_leverage_pool,args)
-        for order in value:
-            if order['side']=='sell':
-                self.sell_order_quantity+=order['quantity']
-                self.sell_executed_quantity+=order['filled']
-            else:
-                self.buy_order_quantity+=order['quantity']
-                self.buy_executed_quantity+=order['filled']
-        return value
-
-    """開発中。cancel_orderを平行実行できるようにする。
-    # 指定したsideのオーダーをキャンセル
-    def cancel_order(self,side=None):
+        for side,size,price,timestamp,leverage_level in args:
+            order={'id':datetime.datetime.now().timestamp(),'side':side,'quantity':size,'price':price,'timestamp':timestamp,'filled':0,'remaining':size}
+            self.order_dict[order['id']]=order
+            if side=='buy':
+                self.buy_order_quantity+=size
+            if side=='sell':
+                self.sell_order_quantity+=size
+    # 指定したside,priceのオーダーをキャンセル
+    def om_cancel_order(self,side=None,price=None):
         if side is None:
             args=[order['id'] for order in self.order_dict]
         elif side=='sell':
-            args=[order['id'] for order in self.order_dict if order['side']=='sell']
+            args=[order['id'] for order in self.order_dict if order['side']=='sell' and order['price']>=price]
         elif side=='buy':
-            args=[order['id'] for order in self.order_dict if order['side']=='buy']
-        values=
-    """
+            args=[order['id'] for order in self.order_dict if order['side']=='buy' and order['price']<=price]
+        for order_id in args:
+            self.order_dict.pop(order_id)
+    
     # 指定したポジションをクローズする。
-    def position_close_all(self):
-        pass
+    def om_position_close_all(self,best_ask,best_bid):
+        # ポジションを全決済
+        if self.stock==0:
+            pass
+        elif self.stock<0:
+            self.jpy_delta-=self.stock*(best_bid+self.params.slipage_price)
+        else:
+            self.jpy_delta+=self.stock*(best_ask-self.params.slipage_price)
+        self.stock=0
 
     def average_price(self):
         if abs(self.stock)<1e-5:return None
         return self.jpy_delta/self.stock
 
-    def join(self,):
-        self.end_flg=1
-        self.t_user_order.join()
-        self.executor.shutdown()
+    def join(self):
+        return
 
 
 # リアルタイムで板情報、ローソク足を記録するクラス。
@@ -490,6 +515,42 @@ def book_to_accumulation_out(row,lap=250,n=40):
     return ask_ary,bid_ary
 
 
+#・板情報:（中央値からの）累積数量がxをはじめて越える中央値からの価格差。 
+# (x=0.0001,0.0002,0.0004,0.0008,0.0016,0.0032,0.0064,0.0128,0.0256,0.0512,0.1024,0.2048,0.4096,0.8192,1.6384 (15個)) 
+xary=[0.0001]
+for _ in range(14):
+    xary.append(xary[-1]*2)
+def book_to_exp(book,x=xary):
+    st=(book['asks'][0][0]+book['bids'][0][0])/2
+    ask_exp=[]
+    now_quantity=0
+    now_price=st
+    ary=book['asks']
+    idx=0
+    for x in xary:
+        while idx<len(ary) and now_quantity+ary[idx][1]<=x:
+            now_quantity+=ary[idx][1]
+            idx+=1
+        if idx==len(ary):
+            ask_exp.append(ask_exp[-1])
+        else:
+            ask_exp.append(abs(st-ary[idx][0]))
+    bid_exp=[]
+    now_quantity=0
+    now_price=st
+    ary=book['bids']
+    idx=0
+    for x in xary:
+        while idx<len(ary) and now_quantity+ary[idx][1]<=x:
+            now_quantity+=ary[idx][1]
+            now_price=ary[idx][0]
+            idx+=1
+        if idx==len(ary):
+            bid_exp.append(bid_exp[-1])
+        else:
+            bid_exp.append(abs(st-ary[idx][0]))
+    return ask_exp,bid_exp
+
 from collections import deque
 # 指数平潤移動平均
 class Ema:
@@ -523,3 +584,50 @@ class Sma:
         else:
             self.sma_ary.append(self.sma_ary[-1]-self.ori_ary[0]/self.n+x/self.n)
             self.ori_ary.append(x)
+
+def book_dict_to_row(book_dict):
+    ret=[book_dict['timestamp']]
+    for i in range(40):
+        ret.append(book_dict['asks'][i][0])
+        ret.append(book_dict['asks'][i][1])
+    for i in range(40):
+        ret.append(book_dict['bids'][i][0])
+        ret.append(book_dict['bids'][i][1])
+    return ret
+def book_row_to_dict(book_row):
+    ret={'timestamp':book_row[0]}
+    ret['asks']=[]
+    for i in range(21):
+        ret['asks'].append([book_row[2*i+1],book_row[2*i+2]])
+    ret['bids']=[]
+    for i in range(21):
+        ret['bids'].append([book_row[42+2*i+1],book_row[42+2*i+2]])
+    return ret
+
+import datetime
+def ohlcv_dict_to_row(ohlcv_dict):
+    JST=datetime.timezone(datetime.timedelta(hours=+9), 'JST')
+    ret=[ohlcv_dict['timestamp']]
+    ret.append(ohlcv_dict['open'])
+    ret.append(ohlcv_dict['high'])
+    ret.append(ohlcv_dict['low'])
+    ret.append(ohlcv_dict['close'])
+    ret.append(ohlcv_dict['volume'])
+    ret.append(ohlcv_dict['buy_volume'])
+    ret.append(ohlcv_dict['sell_volume'])
+    ret.append(ohlcv_dict['first_execution_id'])
+    ret.append(ohlcv_dict['last_execution_id'])
+    return ret
+
+def ohlcv_row_to_dict(ohlcv_row):
+    ret={'timestamp':ohlcv_row[0]}
+    ret['open']=ohlcv_row[1]
+    ret['high']=ohlcv_row[2]
+    ret['low']=ohlcv_row[3]
+    ret['close']=ohlcv_row[4]
+    ret['volume']=ohlcv_row[5]
+    ret['buy_volume']=ohlcv_row[6]
+    ret['sell_volume']=ohlcv_row[7]
+    ret['first_execution_id']=ohlcv_row[8]
+    ret['last_execution_id']=ohlcv_row[9]
+    return ret

@@ -32,8 +32,9 @@ def channel_market(q):
 # 約定情報 
 def channel_executions_cash(q): 
     def update_callback_executions(data): 
-        data=json.loads(data) 
-        q.put(data) 
+        data=json.loads(data)
+        data['timestamp']=float(data['timestamp'])
+        q.put(data)
     def on_connect(data): 
         tap.pusher.subscribe("executions_cash_btcjpy").bind('created', update_callback_executions) 
     tap = liquidtap.Client() 
@@ -46,6 +47,7 @@ def channel_executions_cash(q):
 def channel_execution_details_cash(q):
     def update_callback_executions_detail(data):
         data=json.loads(data)
+        data['timestamp']=float(data['timestamp'])
         q.put(data)
     def on_connect(data):
         tap.pusher.subscribe("executions_cash_btcjpy").bind('created', update_callback_executions_detail)
@@ -102,6 +104,9 @@ def channel_ohlcv(q):
 def channel_price_ladders(q):
     def update_callback(data):
         data=json.loads(data)
+        data['asks']=[[float(x),float(y)] for x,y in data['asks']]
+        data['bids']=[[float(x),float(y)] for x,y in data['bids']]
+        data['timestamp']=float(data['timestamp'])
         q.put(data)
     def on_connect(data):
         tap.pusher.subscribe("price_ladders_cash_btcjpy").bind('updated', update_callback)
@@ -171,8 +176,6 @@ def channel_user_execution(q):
     while True:
         time.sleep(10)
 
-
-
 def fetch_executions(timestamp, limit=1000, product_id=5):
     api = Quoinex("", "")
     retry_count = 0
@@ -233,9 +236,9 @@ def virtual_channel_execution_details_cash(q,start_timestamp=None,end_timestamp=
     start_datetime=datetime.datetime.fromtimestamp(start_timestamp,jst)
     end_datetime=datetime.datetime.fromtimestamp(end_timestamp,jst)
     files=[]
-    while start_datetime<end_datetime:
+    while start_datetime<=end_datetime:
         ymdh=datetime.datetime.strftime(start_datetime,'%Y%m%d_%H')
-        files.append(f'execution_{ymdh}.dat')
+        files.append(f'dat/execution_{ymdh}.dat')
         start_datetime+=datetime.timedelta(hours=1)
     current_dir=os.path.dirname(os.path.realpath(__file__))
     for fl in files:
@@ -259,11 +262,11 @@ def virtual_channel_price_ladders(q,start_timestamp=None,end_timestamp=None):
     start_datetime=datetime.datetime.fromtimestamp(start_timestamp,jst)
     end_datetime=datetime.datetime.fromtimestamp(end_timestamp,jst)
     files=[]
-    while start_datetime<end_datetime:
+    while start_datetime<=end_datetime:
         ymdh=datetime.datetime.strftime(start_datetime,'%Y%m%d_%H')
-        files.append(f'book_{ymdh}.dat')
+        files.append(f'dat/book_{ymdh}.dat')
         start_datetime+=datetime.timedelta(hours=1)
-
+    print(files)
     current_dir=os.path.dirname(os.path.realpath(__file__))
     for fl in files:
         with open(os.path.join(current_dir,fl)) as f:
@@ -307,6 +310,55 @@ def virtual_channel_ohlcv_and_book(q_ohlcv,q_book,start_timestamp=None,end_times
         start_timestamp = executions[-1]['timestamp'] + 1
         time.sleep(1)
 
+
+
+# qに指定期間の情報をputする。datファイルから取得する。
+class virtual_channel:
+    def __init__(self,file_type,params):
+        self.start_timestamp=params.start_timestamp
+        self.end_timestamp=params.end_timestamp
+        self.now_timestamp=params.start_timestamp
+        self.span=params.span
+        jst = datetime.timezone(datetime.timedelta(hours=9), "JST")
+        start_datetime=datetime.datetime.fromtimestamp(params.start_timestamp,jst)
+        end_datetime=datetime.datetime.fromtimestamp(params.end_timestamp,jst)
+        files=[]
+        current_dir=os.path.dirname(os.path.realpath(__file__))
+        while start_datetime<=end_datetime:
+            ymdh=datetime.datetime.strftime(start_datetime,'%Y%m%d_%H')
+            files.append(os.path.join(current_dir,f'dat/{file_type}_{ymdh}.dat'))
+            start_datetime+=datetime.timedelta(hours=1)
+        self.files=files
+        self.idx_file=0
+        self.idx_row=0
+        with open(self.files[0],'r') as f:
+            self.load_file=f.readlines()
+            self.load_row=json.loads(self.load_file[0])
+            self.load_row['timestamp']=float(self.load_row['timestamp'])
+
+    def next_data(self):
+        ret=[]
+        # self.now_timestamp~self.now_timestamp+self.spanのデータをqにいれる。
+        while self.load_row['timestamp']<self.now_timestamp+self.span:
+            if self.now_timestamp<=self.load_row['timestamp']:
+                ret.append(self.load_row)
+            # 次のデータをロード
+            self.idx_row+=1
+            # idx_rowが最終行をすぎていたら次のファイルを読み込み
+            if self.idx_row>=len(self.load_file):
+                self.idx_file+=1
+                if self.idx_file<len(self.files):
+                    with open(self.files[self.idx_file],'r') as f:
+                        self.load_file=f.readlines()
+                    self.idx_row=0
+                else:
+                    break
+            self.load_row=json.loads(self.load_file[self.idx_row])
+            self.load_row['timestamp']=float(self.load_row['timestamp'])
+        self.now_timestamp+=self.span
+        return ret
+
+
 if __name__=='__main__':
     # プロセス設定
     q=Queue()
@@ -314,9 +366,9 @@ if __name__=='__main__':
     #p1=Process(target=channel_user_trade,args=(q,))
     #p1=Process(target=channel_user_execution,args=(q,))
     #p1=Process(target=channel_user_order,args=(q,))
-    start_timestamp=datetime.datetime.strptime('202104091900','%Y%m%d%H%M')
+    start_timestamp=datetime.datetime.strptime('2021040919','%Y%m%d%H')
     start_timestamp=start_timestamp.timestamp()
-    end_timestamp=datetime.datetime.strptime('202104092000','%Y%m%d%H%M')
+    end_timestamp=datetime.datetime.strptime('2021040919','%Y%m%d%H')
     end_timestamp=end_timestamp.timestamp()
     #virtual_channel_execution_details_cash(q,start_timestamp,end_timestamp)
 
@@ -329,7 +381,7 @@ if __name__=='__main__':
     #p0.start()
     for _ in range(100):
         v=q.get()
-        print(v)
+        #print(v)
         #time.sleep(10)
     print(datetime.datetime.now().timestamp())
     p1.terminate()

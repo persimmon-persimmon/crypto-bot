@@ -25,6 +25,14 @@ except:
 
 exchange=ccxt.liquid({'apiKey':token,'secret':secret})
 
+def get_ticker():
+    value=exchange.fetch_ticker('BTC/JPY')
+    return value
+
+if __name__=='__main__':
+    v=get_ticker()
+    pprint(v)
+
 def get_book(pair='BTC/JPY'):
     while True:
         yield  exchange.fetch_order_book(pair)
@@ -154,9 +162,6 @@ def market_leverage(side,size,timestamp=None,leverage_level=2):
         'filled':0., 'remaining':size,
         'quantity':size,'price':value['price'],'side':side}
     return ret
-if __name__=='__main__':
-    value=market_leverage('buy',0.0001)
-    pprint(value)
 
 # 指値注文する関数
 def limit(side,size,price,pair='BTC/JPY'):
